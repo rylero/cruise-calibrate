@@ -117,10 +117,6 @@
     <div class="drop" id="drop">Drop a .fit file here, or click to choose one</div>
     <input type="file" id="fileInput" accept=".fit" class="hidden">
     <div id="loadMsg"></div>
-    <div class="row">
-      <button class="secondary" id="synthBtn">Run synthetic self-test instead</button>
-      <span style="color:var(--muted); font-size:.8rem;">(generates a known ship + runner track to sanity-check the pipeline before trusting a real recording)</span>
-    </div>
   </div>
 
   <div class="card hidden" id="lapCard">
@@ -1085,15 +1081,12 @@ const edgeMsg = document.getElementById('edgeMsg');
 const csvBtn = document.getElementById('csvBtn');
 const fitBtn = document.getElementById('fitBtn');
 const plotsCard = document.getElementById('plotsCard');
-const synthBtn = document.getElementById('synthBtn');
 const unitKmBtn = document.getElementById('unitKmBtn');
 const unitMiBtn = document.getElementById('unitMiBtn');
 
 let currentTrack = null;
 let currentLaps = [];
 let currentResult = null;
-let isSynthetic = false;
-let syntheticTruth = null;
 let currentProjRef = null; // {lat0, lon0} for inverse-projecting corrected FIT export
 let referenceLapPeriodS = null;
 
@@ -1117,7 +1110,6 @@ fileInput.addEventListener('change', e=>{
 });
 
 function handleFile(file){
-  isSynthetic = false; syntheticTruth = null;
   loadMsg.className = 'msg info'; loadMsg.textContent = 'Parsing '+file.name+'…';
   const reader = new FileReader();
   reader.onload = () => {
@@ -1143,19 +1135,6 @@ function handleFile(file){
   reader.onerror = () => { loadMsg.className = 'msg err'; loadMsg.textContent = 'Could not read file.'; };
   reader.readAsArrayBuffer(file);
 }
-
-synthBtn.addEventListener('click', ()=>{
-  isSynthetic = true;
-  const synth = generateSyntheticScenario({});
-  syntheticTruth = synth.truth;
-  currentTrack = {t:synth.t, x:synth.x, y:synth.y};
-  currentLaps = synth.laps;
-  currentProjRef = {lat0: 47.6*Math.PI/180, lon0: -122.3*Math.PI/180}; // arbitrary reference point for synthetic data
-  loadMsg.className = 'msg info';
-  loadMsg.textContent = 'Generated synthetic track: ship at '+synth.truth.shipSpeed.toFixed(1)+
-    ' m/s, runner doing a ~100 m loop ('+synth.laps.length+' laps), true runner distance '+fmtDist(synth.truth.runnerDistance)+'.';
-  prepareDetection();
-});
 
 function prepareDetection(){
   lapCard.classList.remove('hidden');
@@ -1290,12 +1269,6 @@ function renderResults(){
     <div class="stat"><div class="k">Est. avg ship speed</div><div class="v">${avgShipSpeed.toFixed(2)} m/s (${(avgShipSpeed*1.94384).toFixed(1)} kt)</div></div>
     <div class="stat"><div class="k">Segments</div><div class="v">${r.segments.length}</div></div>
   `;
-  if(isSynthetic && syntheticTruth){
-    const err = 100*(r.correctedDistance-syntheticTruth.runnerDistance)/syntheticTruth.runnerDistance;
-    statsHtml += `
-    <div class="stat"><div class="k">True runner distance (synthetic)</div><div class="v">${fmtDist(syntheticTruth.runnerDistance)}</div></div>
-    <div class="stat"><div class="k">Recovery error</div><div class="v${Math.abs(err)<10?' accent':''}">${err.toFixed(1)}%</div></div>`;
-  }
   const calib = computeCalibration(r.correctedDistance);
   if(calib){
     statsHtml += `
@@ -1358,7 +1331,7 @@ csvBtn.addEventListener('click', ()=>{
   const blob = new Blob([lines.join('\n')], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (isSynthetic?'synthetic':'cruise')+'_correction.csv';
+  a.download = 'cruise_correction.csv';
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -1380,7 +1353,7 @@ fitBtn.addEventListener('click', ()=>{
   const blob = new Blob([buf], {type:'application/octet-stream'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (isSynthetic?'synthetic':'cruise')+'_corrected.fit';
+  a.download = 'cruise_corrected.fit';
   a.click();
   URL.revokeObjectURL(a.href);
 });
