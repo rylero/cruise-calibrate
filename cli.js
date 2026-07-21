@@ -24,13 +24,17 @@ Options:
   --known-laps <n>     Lap count to pair with --known-dist.
   --units <km|mi>      Output units (default km).
   --fit <out.fit>      Write a corrected .fit file.
+  --trace <ship|gps>   Track written into --fit. 'ship' (default) writes the
+                       reconstructed deck laps, which match the corrected
+                       distance; 'gps' writes the original coordinates, whose
+                       drawn path is the ship's transit and will not match.
   --csv <out.csv>      Write a per-sample CSV.
   --json               Emit results as JSON instead of a text report.
   -h, --help           Show this help.
 `;
 
 function parseArgs(argv){
-  const opts = {units:'km', kalman:{enabled:false, q:0.5, r:9}, deRotate:true};
+  const opts = {units:'km', kalman:{enabled:false, q:0.5, r:9}, deRotate:true, trace:'ship'};
   const rest = [];
   for(let i=0;i<argv.length;i++){
     const a = argv[i];
@@ -55,6 +59,7 @@ function parseArgs(argv){
       case '--known-laps': opts.knownLaps = num(); break;
       case '--units': opts.units = val(); break;
       case '--fit': opts.fitOut = val(); break;
+      case '--trace': opts.trace = val(); break;
       case '--csv': opts.csvOut = val(); break;
       case '--json': opts.json = true; break;
       default:
@@ -64,6 +69,7 @@ function parseArgs(argv){
   }
   if(rest.length !== 1) fail(rest.length ? 'expected exactly one input file' : 'no input file given');
   if(opts.units !== 'km' && opts.units !== 'mi') fail('--units must be km or mi');
+  if(opts.trace !== 'ship' && opts.trace !== 'gps') fail("--trace must be ship or gps");
   opts.input = rest[0];
   return opts;
 }
@@ -109,7 +115,7 @@ function main(){
     calibrated = {knownDistanceM: known, scale: known/result.correctedDistance};
   }
 
-  if(opts.fitOut) writeFit(opts.fitOut, result, track);
+  if(opts.fitOut) writeFit(opts.fitOut, result, track, opts.trace);
   if(opts.csvOut) writeCsv(opts.csvOut, result);
 
   if(opts.json){
@@ -148,21 +154,13 @@ function main(){
     L.push(`  Note: ${perSeg} of ${result.segments.length} segment(s) have edge samples where the`);
     L.push('  ship-velocity estimate is unreliable; those are excluded from the total.');
   }
-  if(opts.fitOut) L.push(`\n  Wrote ${opts.fitOut}`);
+  if(opts.fitOut) L.push(`\n  Wrote ${opts.fitOut} (${opts.trace === 'gps' ? 'original GPS trace' : 'reconstructed deck laps'})`);
   if(opts.csvOut) L.push(`  Wrote ${opts.csvOut}`);
   process.stdout.write(L.join('\n') + '\n');
 }
 
-function writeFit(out, result, track){
-  const samples = [];
-  let offset = 0;
-  for(const seg of result.segments){
-    for(let i=0;i<seg.uni.t.length;i++){
-      const {lat, lon} = core.unprojectENU(seg.uni.x[i], seg.uni.y[i], track.lat0, track.lon0);
-      samples.push({tUnix: seg.uni.t[i], lat, lon, distM: offset + seg.cumCorrected[i]});
-    }
-    offset += seg.correctedDistance;
-  }
+function writeFit(out, result, track, trace){
+  const samples = core.buildExportSamples(result, track, {trace});
   fs.writeFileSync(out, Buffer.from(core.buildCorrectedFit(samples)));
 }
 

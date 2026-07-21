@@ -166,6 +166,7 @@
     <div class="row">
       <button class="secondary" id="csvBtn">Download per-sample CSV</button>
       <button class="secondary" id="fitBtn">Download corrected .fit</button>
+      <label title="The exported map track. The reconstructed laps match the corrected distance; the original GPS track is the ship's path across the sea and will not."><input type="checkbox" id="exportGpsTraceChk"> Export original GPS trace instead of reconstructed laps</label>
     </div>
   </div>
 
@@ -217,7 +218,7 @@
 const {
   parseFit, projectENU, unprojectENU, estimateGpsNoiseStd, splitSegments,
   resampleUniform, centralDiffVelocity, autocorrelate, runFullCorrection,
-  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit,
+  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit, buildExportSamples,
   fmtDist, fmtPace, setUnitSystem, getUnitSystem
 } = CruiseCore;
 /* ==================== Canvas plotting ==================== */
@@ -345,6 +346,7 @@ const segTableEl = document.getElementById('segTable');
 const edgeMsg = document.getElementById('edgeMsg');
 const csvBtn = document.getElementById('csvBtn');
 const fitBtn = document.getElementById('fitBtn');
+const exportGpsTraceChk = document.getElementById('exportGpsTraceChk');
 const plotsCard = document.getElementById('plotsCard');
 const unitKmBtn = document.getElementById('unitKmBtn');
 const unitMiBtn = document.getElementById('unitMiBtn');
@@ -615,16 +617,9 @@ csvBtn.addEventListener('click', ()=>{
 fitBtn.addEventListener('click', ()=>{
   if(!currentResult || !currentProjRef) return;
   const r = currentResult;
-  const samples = [];
-  let offset = 0;
-  for(const seg of r.segments){
-    const n = seg.uni.t.length;
-    for(let i=0;i<n;i++){
-      const {lat, lon} = unprojectENU(seg.uni.x[i], seg.uni.y[i], currentProjRef.lat0, currentProjRef.lon0);
-      samples.push({tUnix: seg.uni.t[i], lat, lon, distM: offset+seg.cumCorrected[i]});
-    }
-    offset += seg.correctedDistance;
-  }
+  const samples = buildExportSamples(r, currentProjRef, {
+    trace: exportGpsTraceChk.checked ? 'gps' : 'ship'
+  });
   const buf = buildCorrectedFit(samples);
   const blob = new Blob([buf], {type:'application/octet-stream'});
   const a = document.createElement('a');

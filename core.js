@@ -560,6 +560,8 @@ function runFullCorrection(track, lapMessages, opts){
       kalman: opts.kalman || {enabled:false}
     });
     res.lapCount = segLaps.length;
+    res.shipFrameX = [];
+    res.shipFrameY = [];
     segResults.push(res);
 
     correctedDistance += res.correctedDistance;
@@ -589,6 +591,8 @@ function runFullCorrection(track, lapMessages, opts){
       }
       combinedShipFrameX.push(px);
       combinedShipFrameY.push(py);
+      res.shipFrameX.push(px);
+      res.shipFrameY.push(py);
     }
     for(let i=0;i<seg.x.length;i++){
       combinedRawX.push(seg.x[i]);
@@ -606,6 +610,43 @@ function runFullCorrection(track, lapMessages, opts){
     combinedT, combinedSpeed, combinedShipSpeed, combinedVRel,
     combinedRawX, combinedRawY, combinedShipFrameX, combinedShipFrameY
   };
+}
+
+/* ==================== Export sample construction ==================== */
+
+// Builds the {tUnix, lat, lon, distM} samples handed to buildCorrectedFit.
+//
+// trace 'ship' (default) writes the reconstructed ship-frame path: the laps as
+// actually run on the deck, anchored at the activity's starting coordinate.
+// This is what matches the corrected distance.
+//
+// trace 'gps' writes the original coordinates instead. Those are geographically
+// true but include the ship's transit, so the drawn track is the vessel's path
+// smeared across the sea and its on-screen length disagrees with the corrected
+// distance stored alongside it.
+function buildExportSamples(result, track, opts){
+  opts = opts || {};
+  const useShipFrame = opts.trace !== 'gps';
+  const samples = [];
+  let offset = 0;
+  for(const seg of result.segments){
+    for(let i=0;i<seg.uni.t.length;i++){
+      let x, y;
+      if(useShipFrame){
+        // Anchor the deck path at the first fix of the segment so the loops are
+        // drawn at a plausible position rather than off the coast of Africa.
+        x = seg.uni.x[0] + seg.shipFrameX[i];
+        y = seg.uni.y[0] + seg.shipFrameY[i];
+      } else {
+        x = seg.uni.x[i];
+        y = seg.uni.y[i];
+      }
+      const {lat, lon} = unprojectENU(x, y, track.lat0, track.lon0);
+      samples.push({tUnix: seg.uni.t[i], lat, lon, distM: offset + seg.cumCorrected[i]});
+    }
+    offset += seg.correctedDistance;
+  }
+  return samples;
 }
 
 /* ==================== Synthetic scenario generator ==================== */
@@ -880,7 +921,7 @@ function buildCorrectedFit(samples){
 
 return {
   // FIT parsing / export
-  parseFit, buildCorrectedFit, fitCrc16, FIT_EPOCH_OFFSET,
+  parseFit, buildCorrectedFit, buildExportSamples, fitCrc16, FIT_EPOCH_OFFSET,
   // geometry
   projectENU, unprojectENU, estimateGpsNoiseStd, median,
   // signal processing
