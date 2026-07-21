@@ -41,6 +41,13 @@ node cli.js activity.fit --units mi --kalman --fit corrected.fit
 node cli.js activity.fit --known-dist 400 --known-laps 12 --json
 ```
 
+The exported `.fit` draws the reconstructed deck laps, so the map and the
+corrected distance agree. `--trace gps` writes the original coordinates instead
+— geographically true, but the drawn path is the ship's transit and its length
+will not match the distance stored beside it. `--pin-laps` subtracts a one-lap
+moving average of position, which holds the laps in place if the stack wanders.
+Both are available on the page as checkboxes.
+
 `node cli.js --help` lists every option. Requires Node 18+ and no dependencies.
 
 ## Layout

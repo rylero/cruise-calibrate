@@ -612,6 +612,50 @@ function runFullCorrection(track, lapMessages, opts){
   };
 }
 
+/* ==================== Ship-frame path assembly ==================== */
+
+// Removes slow drift from a reconstructed path by subtracting a centred moving
+// average taken over roughly one lap. Residual error in the ship-velocity
+// estimate makes the stack of laps wander over the course of a run; averaged
+// over a whole lap the running itself cancels, so what is left is the drift.
+// Subtracting it pins the laps in place without touching their shape.
+//
+// The window shrinks at the two ends rather than extrapolating, so the first
+// and last half-lap are detrended more weakly than the middle.
+function detrendPath(xs, ys, windowSamples){
+  const n = xs.length;
+  const half = Math.max(1, Math.floor(windowSamples/2));
+  const px = new Float64Array(n+1), py = new Float64Array(n+1);
+  for(let i=0;i<n;i++){ px[i+1] = px[i]+xs[i]; py[i+1] = py[i]+ys[i]; }
+  const ox = new Array(n), oy = new Array(n);
+  for(let i=0;i<n;i++){
+    const a = Math.max(0, i-half), b = Math.min(n, i+half+1), c = b-a;
+    ox[i] = xs[i] - (px[b]-px[a])/c;
+    oy[i] = ys[i] - (py[b]-py[a])/c;
+  }
+  return {x: ox, y: oy};
+}
+
+// Per-segment ship-frame path, optionally drift-corrected. Shared by the plot
+// and the exporter so the picture on screen is the one that gets written out.
+function segmentShipFramePath(seg, opts){
+  opts = opts || {};
+  if(!opts.detrend) return {x: seg.shipFrameX, y: seg.shipFrameY};
+  const win = Math.max(3, Math.round((seg.lapPeriodSDisplay || 60)/seg.uni.dt));
+  return detrendPath(seg.shipFrameX, seg.shipFrameY, win);
+}
+
+// Whole-activity ship-frame path for plotting, with nulls between segments.
+function shipFramePath(result, opts){
+  const x = [], y = [];
+  result.segments.forEach((seg, si) => {
+    const p = segmentShipFramePath(seg, opts);
+    for(let i=0;i<p.x.length;i++){ x.push(p.x[i]); y.push(p.y[i]); }
+    if(si < result.segments.length-1){ x.push(null); y.push(null); }
+  });
+  return {x, y};
+}
+
 /* ==================== Export sample construction ==================== */
 
 // Builds the {tUnix, lat, lon, distM} samples handed to buildCorrectedFit.
@@ -630,13 +674,14 @@ function buildExportSamples(result, track, opts){
   const samples = [];
   let offset = 0;
   for(const seg of result.segments){
+    const path = useShipFrame ? segmentShipFramePath(seg, opts) : null;
     for(let i=0;i<seg.uni.t.length;i++){
       let x, y;
       if(useShipFrame){
         // Anchor the deck path at the first fix of the segment so the loops are
         // drawn at a plausible position rather than off the coast of Africa.
-        x = seg.uni.x[0] + seg.shipFrameX[i];
-        y = seg.uni.y[0] + seg.shipFrameY[i];
+        x = seg.uni.x[0] + path.x[i];
+        y = seg.uni.y[0] + path.y[i];
       } else {
         x = seg.uni.x[i];
         y = seg.uni.y[i];
@@ -927,6 +972,7 @@ return {
   // signal processing
   splitSegments, resampleUniform, kalman1D, kalmanRTSSmooth1D,
   centralDiffVelocity, autocorrelate, shipHeadingSeries,
+  detrendPath, segmentShipFramePath, shipFramePath,
   // correction
   runSegmentPipeline, runFullCorrection,
   // synthetic scenarios / tuning

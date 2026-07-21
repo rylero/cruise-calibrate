@@ -181,6 +181,7 @@
         <div style="font-size:.85rem; color:var(--muted); margin-bottom:4px;">Reconstructed ship-frame path (should look like a repeated closed loop)</div>
         <canvas id="shipCanvas" width="500" height="500"></canvas>
         <label style="margin-top:8px;"><input type="checkbox" id="deRotateChk" checked> De-rotate ship heading (stack laps on the first lap's orientation)</label>
+        <label title="Subtracts a one-lap moving average of position, so residual drift in the ship-velocity estimate stops the stack of laps from wandering."><input type="checkbox" id="pinLapsChk"> Pin laps in place (remove residual drift)</label>
       </div>
     </div>
     <div style="margin-top:16px;">
@@ -218,7 +219,7 @@
 const {
   parseFit, projectENU, unprojectENU, estimateGpsNoiseStd, splitSegments,
   resampleUniform, centralDiffVelocity, autocorrelate, runFullCorrection,
-  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit, buildExportSamples,
+  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit, buildExportSamples, shipFramePath,
   fmtDist, fmtPace, setUnitSystem, getUnitSystem
 } = CruiseCore;
 /* ==================== Canvas plotting ==================== */
@@ -332,6 +333,7 @@ const knownTotalInput = document.getElementById('knownTotal');
 const knownLapDistInput = document.getElementById('knownLapDist');
 const knownLapCountInput = document.getElementById('knownLapCount');
 const deRotateChk = document.getElementById('deRotateChk');
+const pinLapsChk = document.getElementById('pinLapsChk');
 const kalmanCard = document.getElementById('kalmanCard');
 const kalmanEnable = document.getElementById('kalmanEnable');
 const kalmanQInput = document.getElementById('kalmanQ');
@@ -485,6 +487,8 @@ gridSearchBtn.addEventListener('click', ()=>{
 
 // De-rotation is applied while the ship-frame path is integrated, so flipping it
 // means re-running the correction. Distances are unaffected either way.
+pinLapsChk.addEventListener('change', ()=>{ if(currentResult) renderResults(); });
+
 deRotateChk.addEventListener('change', ()=>{
   if(!currentTrack) return;
   runBtn.click();
@@ -576,7 +580,8 @@ function renderResults(){
   }
 
   drawPath(document.getElementById('rawCanvas'), r.combinedRawX, r.combinedRawY);
-  drawPath(document.getElementById('shipCanvas'), r.combinedShipFrameX, r.combinedShipFrameY);
+  const shipPath = shipFramePath(r, {detrend: pinLapsChk.checked});
+  drawPath(document.getElementById('shipCanvas'), shipPath.x, shipPath.y);
   drawTimeSeries(document.getElementById('speedCanvas'), r.combinedT, [
     {data:r.combinedSpeed},
     {data:r.combinedShipSpeed},
@@ -618,7 +623,8 @@ fitBtn.addEventListener('click', ()=>{
   if(!currentResult || !currentProjRef) return;
   const r = currentResult;
   const samples = buildExportSamples(r, currentProjRef, {
-    trace: exportGpsTraceChk.checked ? 'gps' : 'ship'
+    trace: exportGpsTraceChk.checked ? 'gps' : 'ship',
+    detrend: pinLapsChk.checked
   });
   const buf = buildCorrectedFit(samples);
   const blob = new Blob([buf], {type:'application/octet-stream'});

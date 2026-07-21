@@ -28,13 +28,16 @@ Options:
                        reconstructed deck laps, which match the corrected
                        distance; 'gps' writes the original coordinates, whose
                        drawn path is the ship's transit and will not match.
+  --pin-laps           Remove residual drift from the exported deck laps by
+                       subtracting a one-lap moving average of position, so the
+                       laps stack in place instead of wandering.
   --csv <out.csv>      Write a per-sample CSV.
   --json               Emit results as JSON instead of a text report.
   -h, --help           Show this help.
 `;
 
 function parseArgs(argv){
-  const opts = {units:'km', kalman:{enabled:false, q:0.5, r:9}, deRotate:true, trace:'ship'};
+  const opts = {units:'km', kalman:{enabled:false, q:0.5, r:9}, deRotate:true, trace:'ship', detrend:false};
   const rest = [];
   for(let i=0;i<argv.length;i++){
     const a = argv[i];
@@ -60,6 +63,7 @@ function parseArgs(argv){
       case '--units': opts.units = val(); break;
       case '--fit': opts.fitOut = val(); break;
       case '--trace': opts.trace = val(); break;
+      case '--pin-laps': opts.detrend = true; break;
       case '--csv': opts.csvOut = val(); break;
       case '--json': opts.json = true; break;
       default:
@@ -115,7 +119,7 @@ function main(){
     calibrated = {knownDistanceM: known, scale: known/result.correctedDistance};
   }
 
-  if(opts.fitOut) writeFit(opts.fitOut, result, track, opts.trace);
+  if(opts.fitOut) writeFit(opts.fitOut, result, track, opts);
   if(opts.csvOut) writeCsv(opts.csvOut, result);
 
   if(opts.json){
@@ -159,8 +163,8 @@ function main(){
   process.stdout.write(L.join('\n') + '\n');
 }
 
-function writeFit(out, result, track, trace){
-  const samples = core.buildExportSamples(result, track, {trace});
+function writeFit(out, result, track, opts){
+  const samples = core.buildExportSamples(result, track, {trace: opts.trace, detrend: opts.detrend});
   fs.writeFileSync(out, Buffer.from(core.buildCorrectedFit(samples)));
 }
 
