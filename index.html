@@ -179,6 +179,7 @@
       <div>
         <div style="font-size:.85rem; color:var(--muted); margin-bottom:4px;">Reconstructed ship-frame path (should look like a repeated closed loop)</div>
         <canvas id="shipCanvas" width="500" height="500"></canvas>
+        <label style="margin-top:8px;"><input type="checkbox" id="deRotateChk" checked> De-rotate ship heading (stack laps on the first lap's orientation)</label>
       </div>
     </div>
     <div style="margin-top:16px;">
@@ -646,8 +647,33 @@ function runSegmentPipeline(seg, opts){
   const n = uni.t.length;
   const reliable = new Array(n);
   for(let i=0;i<n;i++) reliable[i] = maX.reliable[i] && maY.reliable[i];
+  
   const vShipX = extrapolateEdges(maX.avg, reliable);
   const vShipY = extrapolateEdges(maY.avg, reliable);
+  for (let i = 0; i < n; i++) {
+      if (!reliable[i]) {
+        if (i < reliable.length / 2) {
+          for (let j = i; j < n; j++) {
+            if (reliable[j]) {
+              reliable[i] = reliable[j];
+              vShipX[i] = vShipX[j];
+              vShipY[i] = vShipY[j];
+              break;
+            }
+          }
+        } else {
+          for (let j = i; j > 0; j--) {
+            if (reliable[j]) {
+              reliable[i] = reliable[j];
+              vShipX[i] = vShipX[j];
+              vShipY[i] = vShipY[j];
+              break;
+            }
+          }
+        }
+      }
+  }
+
   const vRelX = new Array(n), vRelY = new Array(n), vRelMag = new Array(n), shipSpeed = new Array(n);
   for(let i=0;i<n;i++){
     vRelX[i] = vx[i]-vShipX[i];
@@ -668,6 +694,7 @@ function runSegmentPipeline(seg, opts){
     if(reliable[i]){ correctedDistance += vRelMag[i]*uni.dt; reliableTime += uni.dt; cum += vRelMag[i]*uni.dt; }
     cumCorrected[i] = cum;
   }
+
   const nUnreliable = reliable.filter(r=>!r).length;
 
   return {
@@ -680,6 +707,31 @@ function runSegmentPipeline(seg, opts){
 
 /* ==================== Full-activity correction (segments + chaining) ==================== */
 
+// Below this ship speed (m/s) the heading of the ship-velocity vector is mostly
+// noise, so de-rotation holds the last trustworthy heading instead.
+const MIN_HEADING_SPEED = 0.5;
+
+// Ship heading from the smoothed ship-velocity vector, unwrapped so it can be
+// differenced without 2pi jumps. Below minSpeed the direction of a near-zero
+// vector is meaningless, so hold the last trustworthy heading instead.
+function shipHeadingSeries(vShipX, vShipY, shipSpeed, minSpeed){
+  const n = vShipX.length, out = new Array(n);
+  let last = null;
+  for(let i=0;i<n;i++){
+    if(shipSpeed[i] >= minSpeed){
+      let a = Math.atan2(vShipY[i], vShipX[i]);
+      if(last !== null) a += Math.round((last-a)/(2*Math.PI))*2*Math.PI;
+      last = a;
+    }
+    out[i] = last;
+  }
+  // Leading samples run before the first trustworthy heading — back-fill them
+  // with it (or 0 if the ship never moved fast enough to have a heading).
+  const first = out.find(v => v !== null);
+  for(let i=0;i<n;i++) if(out[i] === null) out[i] = (first === undefined ? 0 : first);
+  return out;
+}
+
 function runFullCorrection(track, lapMessages, opts){
   opts = opts || {};
   const segments = splitSegments(track.t, track.x, track.y);
@@ -689,6 +741,11 @@ function runFullCorrection(track, lapMessages, opts){
   const combinedT=[], combinedSpeed=[], combinedShipSpeed=[], combinedVRel=[];
   const combinedRawX=[], combinedRawY=[], combinedShipFrameX=[], combinedShipFrameY=[];
   let runningSfx = 0, runningSfy = 0;
+  // Reference heading for de-rotation: the ship's heading at the very first
+  // sample of the activity. Every lap is rotated back onto this so the loops
+  // stack instead of fanning out as the ship turns.
+  const deRotate = opts.deRotate !== false;
+  let refHeading = null;
 
   segments.forEach((seg, si) => {
     const t0 = seg.t[0], t1 = seg.t[seg.t.length-1];
@@ -709,6 +766,9 @@ function runFullCorrection(track, lapMessages, opts){
     reliableTime += res.reliableTime;
     rawDistanceAll += res.rawDistanceAll;
 
+    const heading = shipHeadingSeries(res.vShipX, res.vShipY, res.shipSpeed, MIN_HEADING_SPEED);
+    if(refHeading === null && heading.length) refHeading = heading[0];
+
     for(let i=0;i<res.uni.t.length;i++){
       combinedT.push(res.uni.t[i]);
       combinedSpeed.push(res.speed[i]);
@@ -716,8 +776,19 @@ function runFullCorrection(track, lapMessages, opts){
       combinedVRel.push(res.vRelMag[i]);
       runningSfx += res.vRelX[i]*res.uni.dt;
       runningSfy += res.vRelY[i]*res.uni.dt;
-      combinedShipFrameX.push(runningSfx);
-      combinedShipFrameY.push(runningSfy);
+      // De-rotation must be applied to the accumulated position, not to the
+      // velocity: with p_earth = R(dtheta)*p_deck the earth-frame velocity also
+      // carries an Rdot*p_deck term, so rotating velocity and then integrating
+      // leaves a residual that grows with turn rate and smears the loops.
+      // Rotating the position undoes the ship's turn exactly.
+      let px = runningSfx, py = runningSfy;
+      if(deRotate){
+        const a = -(heading[i] - refHeading), ca = Math.cos(a), sa = Math.sin(a);
+        px = runningSfx*ca - runningSfy*sa;
+        py = runningSfx*sa + runningSfy*ca;
+      }
+      combinedShipFrameX.push(px);
+      combinedShipFrameY.push(py);
     }
     for(let i=0;i<seg.x.length;i++){
       combinedRawX.push(seg.x[i]);
@@ -1066,6 +1137,7 @@ const calibCard = document.getElementById('calibCard');
 const knownTotalInput = document.getElementById('knownTotal');
 const knownLapDistInput = document.getElementById('knownLapDist');
 const knownLapCountInput = document.getElementById('knownLapCount');
+const deRotateChk = document.getElementById('deRotateChk');
 const kalmanCard = document.getElementById('kalmanCard');
 const kalmanEnable = document.getElementById('kalmanEnable');
 const kalmanQInput = document.getElementById('kalmanQ');
@@ -1216,6 +1288,13 @@ gridSearchBtn.addEventListener('click', ()=>{
   }, 20);
 });
 
+// De-rotation is applied while the ship-frame path is integrated, so flipping it
+// means re-running the correction. Distances are unaffected either way.
+deRotateChk.addEventListener('change', ()=>{
+  if(!currentTrack) return;
+  runBtn.click();
+});
+
 runBtn.addEventListener('click', ()=>{
   const override = parseFloat(lapOverrideInput.value);
   const lapOverrideS = (override && override>0) ? override : null;
@@ -1238,7 +1317,11 @@ runBtn.addEventListener('click', ()=>{
     lapOverrideWarn.classList.add('hidden');
   }
 
-  currentResult = runFullCorrection(currentTrack, currentLaps, {manualLapPeriodS: lapOverrideS, kalman: kalmanOpts});
+  currentResult = runFullCorrection(currentTrack, currentLaps, {
+    manualLapPeriodS: lapOverrideS,
+    kalman: kalmanOpts,
+    deRotate: deRotateChk.checked
+  });
   renderResults();
 });
 
