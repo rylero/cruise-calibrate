@@ -1,0 +1,19 @@
+{
+  "name": "cruise-calibrate",
+  "version": "1.0.0",
+  "description": "Recover true running distance from a GPS track recorded while running laps on a moving ship",
+  "bin": {
+    "cruise-calibrate": "cli.js"
+  },
+  "main": "core.js",
+  "files": [
+    "core.js",
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "private": false
+}
