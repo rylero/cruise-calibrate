@@ -31,6 +31,10 @@ Options:
   --pin-laps           Remove residual drift from the exported deck laps by
                        subtracting a one-lap moving average of position, so the
                        laps stack in place instead of wandering.
+  --svg <out.svg>      Write a before/after image: raw GPS trace beside the
+                       reconstructed deck laps, with a 100 m scale bar.
+  --svg-dark           Render the SVG on a dark background.
+  --svg-caption <s>    Caption line for the SVG.
   --csv <out.csv>      Write a per-sample CSV.
   --json               Emit results as JSON instead of a text report.
   -h, --help           Show this help.
@@ -64,6 +68,9 @@ function parseArgs(argv){
       case '--fit': opts.fitOut = val(); break;
       case '--trace': opts.trace = val(); break;
       case '--pin-laps': opts.detrend = true; break;
+      case '--svg': opts.svgOut = val(); break;
+      case '--svg-dark': opts.svgDark = true; break;
+      case '--svg-caption': opts.svgCaption = val(); break;
       case '--csv': opts.csvOut = val(); break;
       case '--json': opts.json = true; break;
       default:
@@ -121,6 +128,13 @@ function main(){
 
   if(opts.fitOut) writeFit(opts.fitOut, result, track, opts);
   if(opts.csvOut) writeCsv(opts.csvOut, result);
+  if(opts.svgOut){
+    fs.writeFileSync(opts.svgOut, core.renderComparisonSVG(result, {
+      dark: opts.svgDark,
+      detrend: opts.detrend,
+      caption: opts.svgCaption || defaultCaption(result)
+    }));
+  }
 
   if(opts.json){
     process.stdout.write(JSON.stringify({
@@ -160,7 +174,12 @@ function main(){
   }
   if(opts.fitOut) L.push(`\n  Wrote ${opts.fitOut} (${opts.trace === 'gps' ? 'original GPS trace' : 'reconstructed deck laps'})`);
   if(opts.csvOut) L.push(`  Wrote ${opts.csvOut}`);
+  if(opts.svgOut) L.push(`  Wrote ${opts.svgOut}`);
   process.stdout.write(L.join('\n') + '\n');
+}
+
+function defaultCaption(result){
+  return `${core.fmtDist(result.rawDistanceAll)} recorded by GPS  ->  ${core.fmtDist(result.correctedDistance)} actually run`;
 }
 
 function writeFit(out, result, track, opts){

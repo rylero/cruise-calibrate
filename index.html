@@ -166,6 +166,7 @@
     <div class="row">
       <button class="secondary" id="csvBtn">Download per-sample CSV</button>
       <button class="secondary" id="fitBtn">Download corrected .fit</button>
+      <button class="secondary" id="pngBtn">Download before/after PNG</button>
       <label title="The exported map track. The reconstructed laps match the corrected distance; the original GPS track is the ship's path across the sea and will not."><input type="checkbox" id="exportGpsTraceChk"> Export original GPS trace instead of reconstructed laps</label>
     </div>
   </div>
@@ -219,7 +220,7 @@
 const {
   parseFit, projectENU, unprojectENU, estimateGpsNoiseStd, splitSegments,
   resampleUniform, centralDiffVelocity, autocorrelate, runFullCorrection,
-  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit, buildExportSamples, shipFramePath,
+  gridSearchKalmanParams, GRID_SEARCH_SCENARIOS, buildCorrectedFit, buildExportSamples, shipFramePath, renderComparisonSVG,
   fmtDist, fmtPace, setUnitSystem, getUnitSystem
 } = CruiseCore;
 /* ==================== Canvas plotting ==================== */
@@ -348,6 +349,7 @@ const segTableEl = document.getElementById('segTable');
 const edgeMsg = document.getElementById('edgeMsg');
 const csvBtn = document.getElementById('csvBtn');
 const fitBtn = document.getElementById('fitBtn');
+const pngBtn = document.getElementById('pngBtn');
 const exportGpsTraceChk = document.getElementById('exportGpsTraceChk');
 const plotsCard = document.getElementById('plotsCard');
 const unitKmBtn = document.getElementById('unitKmBtn');
@@ -617,6 +619,43 @@ csvBtn.addEventListener('click', ()=>{
   a.download = 'cruise_correction.csv';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+// Rasterises the shared SVG renderer at 2x, so the PNG and the CLI's --svg
+// output are the same picture rather than two drifting implementations.
+pngBtn.addEventListener('click', ()=>{
+  if(!currentResult) return;
+  const dark = getComputedStyle(document.documentElement)
+    .getPropertyValue('--bg').trim().toLowerCase().startsWith('#0');
+  const svg = renderComparisonSVG(currentResult, {
+    dark,
+    detrend: pinLapsChk.checked,
+    caption: fmtDist(currentResult.rawDistanceAll)+' recorded by GPS  →  '+
+             fmtDist(currentResult.correctedDistance)+' actually run'
+  });
+  const wMatch = /width="(\d+)" height="(\d+)"/.exec(svg);
+  const w = wMatch ? +wMatch[1] : 1068, h = wMatch ? +wMatch[2] : 854;
+  const scale = 2;
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svg], {type:'image/svg+xml;charset=utf-8'}));
+  img.onload = ()=>{
+    const c = document.createElement('canvas');
+    c.width = w*scale; c.height = h*scale;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = styleColor('--paper');
+    ctx.fillRect(0,0,c.width,c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    c.toBlob(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'cruise_before_after.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  };
+  img.onerror = ()=>{ URL.revokeObjectURL(url); alert('Could not render the image.'); };
+  img.src = url;
 });
 
 fitBtn.addEventListener('click', ()=>{

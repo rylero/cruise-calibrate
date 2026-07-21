@@ -48,6 +48,13 @@ will not match the distance stored beside it. `--pin-laps` subtracts a one-lap
 moving average of position, which holds the laps in place if the stack wanders.
 Both are available on the page as checkboxes.
 
+`--svg out.svg` writes a shareable before/after: the raw GPS trace beside the
+reconstructed laps, plus a speed-over-time panel showing the raw GPS speed
+oscillating as you run with and against the ship, the near-constant estimated
+ship speed, and your actual running speed underneath. Each map panel carries its
+own scale bar, since the two are at very different zooms. The page has the same
+image behind **Download before/after PNG**.
+
 `node cli.js --help` lists every option. Requires Node 18+ and no dependencies.
 
 ## Layout

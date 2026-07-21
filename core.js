@@ -656,6 +656,167 @@ function shipFramePath(result, opts){
   return {x, y};
 }
 
+/* ==================== SVG rendering ==================== */
+
+// Scales a path to fit a box, preserving aspect ratio. Nulls break the line.
+function pathToPolylines(xs, ys, w, h, pad){
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  for(let i=0;i<xs.length;i++){
+    if(xs[i]===null) continue;
+    if(xs[i]<minX) minX=xs[i]; if(xs[i]>maxX) maxX=xs[i];
+    if(ys[i]<minY) minY=ys[i]; if(ys[i]>maxY) maxY=ys[i];
+  }
+  if(!isFinite(minX)) return {lines: [], scale: 1, spanX: 0, spanY: 0};
+  const spanX = Math.max(1e-6, maxX-minX), spanY = Math.max(1e-6, maxY-minY);
+  const scale = Math.min((w-2*pad)/spanX, (h-2*pad)/spanY);
+  const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  const lines = [];
+  let cur = null;
+  for(let i=0;i<xs.length;i++){
+    if(xs[i]===null){ cur = null; continue; }
+    // y is flipped: north up.
+    const px = w/2 + (xs[i]-cx)*scale, py = h/2 - (ys[i]-cy)*scale;
+    if(!cur){ cur = []; lines.push(cur); }
+    cur.push([px, py]);
+  }
+  return {lines, scale, spanX, spanY};
+}
+
+// Largest round distance whose bar fits within maxPx, as {metres, px, label}.
+const SCALE_BAR_STEPS = [10,20,50,100,200,500,1000,2000,5000,10000];
+function chooseScaleBar(scale, maxPx){
+  if(!isFinite(scale) || scale <= 0) return null;
+  let best = null;
+  for(const m of SCALE_BAR_STEPS){
+    const px = m*scale;
+    if(px <= maxPx && px >= 24) best = {metres: m, px, label: m >= 1000 ? (m/1000)+' km' : m+' m'};
+  }
+  return best;
+}
+
+// Two-panel before/after of an activity: the raw GPS trace beside the
+// reconstructed deck laps. Returns SVG markup — no DOM, so the CLI can write it
+// straight to a file.
+function renderComparisonSVG(result, opts){
+  opts = opts || {};
+  const panel = opts.panelSize || 520;
+  const pad = 34, gap = 28, labelH = 54, footH = opts.caption ? 40 : 14;
+  const showSpeed = opts.speed !== false;
+  const speedGap = 30, speedH = showSpeed ? 250 : 0;
+  const w = panel*2 + gap;
+  const h = panel + labelH + (showSpeed ? speedGap + speedH : 0) + footH;
+  const dark = !!opts.dark;
+  const bg = dark ? '#0c0c0c' : '#ffffff';
+  const ink = dark ? '#e6e6e6' : '#232323';
+  const muted = dark ? '#9a9a9a' : '#7a7a7a';
+  const soft = dark ? '#2a2a2a' : '#e6e6e6';
+  const shipPath = shipFramePath(result, opts);
+
+  const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const parts = [];
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`);
+  parts.push(`<rect width="${w}" height="${h}" fill="${bg}"/>`);
+
+  const panels = [
+    {x: 0, title: 'Raw GPS', sub: 'ship transit included', xs: result.combinedRawX, ys: result.combinedRawY},
+    {x: panel+gap, title: 'Reconstructed laps', sub: 'ship motion removed', xs: shipPath.x, ys: shipPath.y}
+  ];
+
+  for(const p of panels){
+    parts.push(`<text x="${p.x+2}" y="24" fill="${ink}" font-size="15" font-weight="700" letter-spacing="1.2">${esc(p.title.toUpperCase())}</text>`);
+    parts.push(`<text x="${p.x+2}" y="43" fill="${muted}" font-size="12.5">${esc(p.sub)}</text>`);
+    parts.push(`<rect x="${p.x}" y="${labelH}" width="${panel}" height="${panel}" fill="none" stroke="${soft}" rx="10"/>`);
+    const {lines, scale} = pathToPolylines(p.xs, p.ys, panel, panel, pad);
+    parts.push(`<g transform="translate(${p.x},${labelH})">`);
+    for(const line of lines){
+      if(line.length < 2) continue;
+      parts.push(`<polyline fill="none" stroke="${ink}" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" opacity="0.9" points="${
+        line.map(pt => pt[0].toFixed(1)+','+pt[1].toFixed(1)).join(' ')}"/>`);
+    }
+    // Scale bar. The two panels are at wildly different zooms — the raw trace
+    // spans kilometres of ship transit, the laps a couple of hundred metres —
+    // so each picks its own round distance rather than sharing a fixed one.
+    const bar = chooseScaleBar(scale, panel*0.34);
+    if(bar){
+      const bx = pad, by = panel-16;
+      parts.push(`<line x1="${bx}" y1="${by}" x2="${(bx+bar.px).toFixed(1)}" y2="${by}" stroke="${muted}" stroke-width="2"/>`);
+      parts.push(`<text x="${bx}" y="${by-6}" fill="${muted}" font-size="11">${bar.label}</text>`);
+    }
+    parts.push('</g>');
+  }
+
+  if(showSpeed){
+    parts.push(renderSpeedPanel(result, {x: 0, y: panel+labelH+speedGap, w, h: speedH, ink, muted, soft}));
+  }
+
+  if(opts.caption){
+    parts.push(`<text x="2" y="${h-14}" fill="${muted}" font-size="12.5">${esc(opts.caption)}</text>`);
+  }
+  parts.push('</svg>');
+  return parts.join('\n');
+}
+
+// Speed over time: what the GPS saw, what the ship was doing, and what is left
+// once the ship is subtracted. The separation between the three is the whole
+// argument for the method, so it gets a panel of its own.
+function renderSpeedPanel(result, g){
+  const toUnit = unitSystem === 'mi' ? 2.2369362920544 : 3.6;
+  const unitLabel = unitSystem === 'mi' ? 'mph' : 'km/h';
+  const plotTop = 30, axisH = 22;
+  const ph = g.h - plotTop - axisH;
+  const t = result.combinedT;
+  let t0 = Infinity, t1 = -Infinity, vMax = 0;
+  for(let i=0;i<t.length;i++){
+    if(t[i]===null) continue;
+    if(t[i]<t0) t0=t[i]; if(t[i]>t1) t1=t[i];
+    const v = result.combinedSpeed[i]*toUnit;
+    if(isFinite(v) && v>vMax) vMax = v;
+  }
+  if(!isFinite(t0)) return '';
+  vMax = Math.max(1, Math.ceil(vMax/5)*5);
+  const span = Math.max(1, t1-t0);
+  const px = tv => g.x + (tv-t0)/span*g.w;
+  const py = v => g.y + plotTop + ph - (v/vMax)*ph;
+
+  const line = (series, stroke, width, dash, opacity) => {
+    const segs = [];
+    let cur = null;
+    for(let i=0;i<t.length;i++){
+      if(t[i]===null || series[i]===null || !isFinite(series[i])){ cur = null; continue; }
+      const p = px(t[i]).toFixed(1)+','+py(series[i]*toUnit).toFixed(1);
+      if(!cur){ cur = []; segs.push(cur); }
+      cur.push(p);
+    }
+    return segs.filter(s => s.length>1).map(s =>
+      `<polyline fill="none" stroke="${stroke}" stroke-width="${width}" opacity="${opacity}"${
+        dash ? ` stroke-dasharray="${dash}"` : ''} points="${s.join(' ')}"/>`).join('\n');
+  };
+
+  const out = [];
+  out.push(`<text x="${g.x+2}" y="${g.y+16}" fill="${g.ink}" font-size="15" font-weight="700" letter-spacing="1.2">SPEED OVER TIME</text>`);
+  out.push(`<rect x="${g.x}" y="${g.y+plotTop}" width="${g.w}" height="${ph}" fill="none" stroke="${g.soft}" rx="10"/>`);
+  for(let k=1;k<4;k++){
+    const yy = g.y+plotTop+ph*k/4;
+    out.push(`<line x1="${g.x}" y1="${yy.toFixed(1)}" x2="${g.x+g.w}" y2="${yy.toFixed(1)}" stroke="${g.soft}" stroke-width="1" opacity="0.6"/>`);
+  }
+  out.push(line(result.combinedSpeed, g.muted, 1.2, null, 0.95));
+  out.push(line(result.combinedShipSpeed, g.muted, 1.6, '5 4', 1));
+  out.push(line(result.combinedVRel, g.ink, 1.5, null, 0.95));
+  out.push(`<text x="${g.x+6}" y="${g.y+plotTop+13}" fill="${g.muted}" font-size="11">${vMax} ${unitLabel}</text>`);
+  out.push(`<text x="${g.x+2}" y="${g.y+g.h-6}" fill="${g.muted}" font-size="11">0 min</text>`);
+  out.push(`<text x="${g.x+g.w}" y="${g.y+g.h-6}" text-anchor="end" fill="${g.muted}" font-size="11">${Math.round(span/60)} min</text>`);
+  // Legend, centred under the plot.
+  const items = [['raw GPS speed', g.muted, 1.2, '0.95', null], ['estimated ship speed', g.muted, 1.6, '1', '5 4'], ['your actual running speed', g.ink, 1.5, '0.95', null]];
+  let lx = g.x + g.w/2 - 235;
+  for(const [label, col, wdt, op, dash] of items){
+    const ly = g.y+g.h-10;
+    out.push(`<line x1="${lx}" y1="${ly-4}" x2="${lx+22}" y2="${ly-4}" stroke="${col}" stroke-width="${wdt}" opacity="${op}"${dash?` stroke-dasharray="${dash}"`:''}/>`);
+    out.push(`<text x="${lx+28}" y="${ly}" fill="${g.muted}" font-size="11.5">${label}</text>`);
+    lx += 28 + label.length*6.6 + 22;
+  }
+  return out.join('\n');
+}
+
 /* ==================== Export sample construction ==================== */
 
 // Builds the {tUnix, lat, lon, distM} samples handed to buildCorrectedFit.
@@ -973,6 +1134,8 @@ return {
   splitSegments, resampleUniform, kalman1D, kalmanRTSSmooth1D,
   centralDiffVelocity, autocorrelate, shipHeadingSeries,
   detrendPath, segmentShipFramePath, shipFramePath,
+  // rendering
+  pathToPolylines, renderComparisonSVG, chooseScaleBar,
   // correction
   runSegmentPipeline, runFullCorrection,
   // synthetic scenarios / tuning
